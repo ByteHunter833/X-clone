@@ -620,42 +620,72 @@ def handle_typing(data):
     logger.info(f"User {user_id} is typing in room {room}")
 
 @socketio.on('send_message')
+@jwt_required()
 def handle_message(data):
-    sender_id = data['sender_id']
-    receiver_id = data.get('receiver_id')
-    group_id = data.get('group_id')
-    content = data.get('content')
-    media_url = data.get('media_url')
+    sender_id = get_jwt_identity()
+    try:
+        validated_data = MessageSchema().load(data)
+    except ValidationError as err:
+        emit('error', {'message': err.messages})
+        return
 
-    new_message = Message(
-        sender_id=sender_id,
-        receiver_id=receiver_id,
-        group_id=group_id,
-        content=content,
-        media_url=media_url
-    )
-    db.session.add(new_message)
-    db.session.commit()
+    receiver_id = validated_data.get('receiver_id')
+    group_id = validated_data.get('group_id')
+    content = validated_data.get('content')
+    media_url = validated_data.get('media_url')
 
-    if receiver_id:
-        room = f"chat_{min(sender_id, receiver_id)}_{max(sender_id, receiver_id)}"
-    else:
-        room = f"group_{group_id}"
+    if not (content or media_url):
+        emit('error', {'message': 'Content or media_url is required'})
+        return
 
-    emit('receive_message', {
-        'id': new_message.id,
-        'sender_id': sender_id,
-        'receiver_id': receiver_id,
-        'group_id': group_id,
-        'content': content,
-        'media_url': media_url,
-        'timestamp': new_message.timestamp.isoformat(),
-        'is_read': new_message.is_read
-    }, room=room)
+    # Bloklanganligini tekshirish
+    if receiver_id and Block.query.filter_by(blocker_id=receiver_id, blocked_id=sender_id).first():
+        emit('error', {'message': 'You are blocked by this user'})
+        return
 
-    # Bildirishnoma yuborish
-    emit('notification', {'message': 'New message received', 'from_user_id': sender_id}, room=room)
+    # Guruh a'zoligini tekshirish
+    if group_id and not GroupMembers.query.filter_by(user_id=sender_id, group_id=group_id).first():
+        emit('error', {'message': 'Not a group member'})
+        return
 
+    try:
+        new_message = Message(
+            sender_id=sender_id,
+            receiver_id=receiver_id,
+            group_id=group_id,
+            content=content,
+            media_url=media_url
+        )
+        db.session.add(new_message)
+        db.session.commit()
+
+        # Guruh xabarlari uchun o'qilgan statusini yaratish
+        if group_id:
+            members = GroupMembers.query.filter_by(group_id=group_id).all()
+            for member in members:
+                if member.user_id != sender_id:
+                    read_status = MessageReadStatus(message_id=new_message.id, user_id=member.user_id)
+                    db.session.add(read_status)
+            db.session.commit()
+
+        room = get_room_name(sender_id, receiver_id, group_id)
+        emit('receive_message', {
+            'id': new_message.id,
+            'sender_id': sender_id,
+            'receiver_id': receiver_id,
+            'group_id': group_id,
+            'content': content,
+            'media_url': media_url,
+            'timestamp': new_message.timestamp.isoformat(),
+            'is_read': new_message.is_read
+        }, room=room)
+
+        emit('notification', {'message': 'New message received', 'from_user_id': sender_id}, room=room)
+        logger.info(f"Message sent by user {sender_id} to room {room}")
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error sending message: {str(e)}")
+        emit('error', {'message': 'Failed to send message'})
 @socketio.on('read_message')
 def handle_read_message(data):
     message_id = data['message_id']
