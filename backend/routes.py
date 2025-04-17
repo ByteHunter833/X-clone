@@ -437,21 +437,38 @@ def get_room_name(user_id=None, receiver_id=None, group_id=None):
     return f"group_{group_id}"
 
 @app.route('/api/create_group', methods=['POST'])
+@jwt_required()
 def create_group():
-    data = request.get_json()
-    name = data.get('name')
-    member_ids = data.get('member_ids')
+    current_user_id = get_jwt_identity()
+    try:
+        data = CreateGroupSchema().load(request.get_json())
+    except ValidationError as err:
+        return error_response(err.messages, 400)
 
-    group = Group(name=name)
-    db.session.add(group)
-    db.session.flush()
+    try:
+        group = Group(name=data['name'])
+        db.session.add(group)
+        db.session.commit()
 
-    for user_id in member_ids:
-        member = GroupMembers(user_id=user_id, group_id=group.id)
+        # Foydalanuvchilarni guruhga qo'shish
+        for user_id in data['member_ids']:
+            if not User.query.get(user_id):
+                db.session.rollback()
+                return error_response(f"User {user_id} not found", 404)
+            member = GroupMembers(user_id=user_id, group_id=group.id)
+            db.session.add(member)
+
+        # Guruh yaratuvchisini qo'shish
+        member = GroupMembers(user_id=current_user_id, group_id=group.id)
         db.session.add(member)
 
-    db.session.commit()
-    return jsonify({'message': 'Group created', 'group_id': group.id}), 201
+        db.session.commit()
+        logger.info(f"Group {group.name} created by user {current_user_id}")
+        return jsonify({'message': 'Group created', 'group_id': group.id}), 201
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error creating group: {str(e)}")
+        return error_response(str(e), 500)
 
 @app.route('/api/messages/<int:user_id>/<int:receiver_id>', methods=['GET'])
 def get_messages(user_id, receiver_id):
