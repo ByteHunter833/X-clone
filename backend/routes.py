@@ -749,20 +749,38 @@ def handle_reaction(data):
         emit('error', {'message': 'Failed to add reaction'})
 
 @socketio.on('delete_message')
+@jwt_required()
 def handle_delete_message(data):
-    message_id = data['message_id']
-    user_id = data['user_id']
-    delete_for_all = data.get('delete_for_all', False)
-
-    message = Message.query.get(message_id)
-    if message.sender_id != user_id:
+    user_id = get_jwt_identity()
+    try:
+        validated_data = DeleteMessageSchema().load(data)
+    except ValidationError as err:
+        emit('error', {'message': err.messages})
         return
 
-    if delete_for_all:
-        db.session.delete(message)
-    else:
-        message.deleted_for = f"{message.deleted_for},{user_id}" if message.deleted_for else str(user_id)
-    db.session.commit()
+    message_id = validated_data['message_id']
+    delete_for_all = validated_data['delete_for_all']
+
+    message = Message.query.get(message_id)
+    if not message or message.sender_id != user_id:
+        emit('error', {'message': 'Unauthorized or message not found'})
+        return
+
+    try:
+        if delete_for_all:
+            db.session.delete(message)
+        else:
+            deleted_message = DeletedMessage(message_id=message_id, user_id=user_id)
+            db.session.add(deleted_message)
+        db.session.commit()
+
+        room = get_room_name(message.sender_id, message.receiver_id, message.group_id)
+        emit('message_deleted', {'message_id': message_id, 'delete_for_all': delete_for_all}, room=room)
+        logger.info(f"Message {message_id} deleted by user {user_id}, for_all={delete_for_all}")
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error deleting message: {str(e)}")
+        emit('error', {'message': 'Failed to delete message'})
 
     room = f"chat_{min(message.sender_id, message.receiver_id)}_{max(message.sender_id, message.receiver_id)}" if message.receiver_id else f"group_{message.group_id}"
     emit('message_deleted', {'message_id': message_id, 'delete_for_all': delete_for_all}, room=room)
