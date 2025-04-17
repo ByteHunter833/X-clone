@@ -471,22 +471,38 @@ def create_group():
         return error_response(str(e), 500)
 
 @app.route('/api/messages/<int:user_id>/<int:receiver_id>', methods=['GET'])
+@jwt_required()
 def get_messages(user_id, receiver_id):
-    messages = Message.query.filter(
-        ((Message.sender_id == user_id) & (Message.receiver_id == receiver_id)) |
-        ((Message.sender_id == receiver_id) & (Message.receiver_id == user_id))
-    ).filter(Message.group_id == None).order_by(Message.timestamp.asc()).all()
+    current_user_id = get_jwt_identity()
+    if current_user_id != user_id:
+        return error_response("Unauthorized access", 403)
 
-    return jsonify([{
-        'id': msg.id,
-        'sender_id': msg.sender_id,
-        'receiver_id': msg.receiver_id,
-        'content': msg.content,
-        'media_url': msg.media_url,
-        'timestamp': msg.timestamp.isoformat(),
-        'is_read': msg.is_read,
-        'reactions': [{'user_id': r.user_id, 'emoji': r.emoji} for r in Reaction.query.filter_by(message_id=msg.id).all()]
-    } for msg in messages if str(user_id) not in msg.deleted_for.split(',')]), 200
+    # Bloklanganligini tekshirish
+    if Block.query.filter_by(blocker_id=receiver_id, blocked_id=user_id).first():
+        return error_response("You are blocked by this user", 403)
+
+    try:
+        messages = Message.query.filter(
+            ((Message.sender_id == user_id) & (Message.receiver_id == receiver_id)) |
+            ((Message.sender_id == receiver_id) & (Message.receiver_id == user_id))
+        ).filter(Message.group_id == None).options(joinedload(Message.reactions)).order_by(Message.timestamp.asc()).all()
+
+        deleted_messages = {dm.message_id for dm in DeletedMessage.query.filter_by(user_id=user_id).all()}
+
+        return jsonify([{
+            'id': msg.id,
+            'sender_id': msg.sender_id,
+            'receiver_id': msg.receiver_id,
+            'content': msg.content,
+            'media_url': msg.media_url,
+            'timestamp': msg.timestamp.isoformat(),
+            'is_read': msg.is_read,
+            'reactions': [{'user_id': r.user_id, 'emoji': r.emoji} for r in msg.reactions]
+        } for msg in messages if msg.id not in deleted_messages]), 200
+    except Exception as e:
+        logger.error(f"Error fetching messages: {str(e)}")
+        return error_response(str(e), 500)
+
 
 
 @app.route('/api/group_messages/<int:group_id>', methods=['GET'])
