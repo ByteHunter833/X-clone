@@ -506,18 +506,29 @@ def get_messages(user_id, receiver_id):
 
 
 @app.route('/api/group_messages/<int:group_id>', methods=['GET'])
+@jwt_required()
 def get_group_messages(group_id):
-    messages = Message.query.filter_by(group_id=group_id).order_by(Message.timestamp.asc()).all()
-    return jsonify([{
-        'id': msg.id,
-        'sender_id': msg.sender_id,
-        'group_id': msg.group_id,
-        'content': msg.content,
-        'media_url': msg.media_url,
-        'timestamp': msg.timestamp.isoformat(),
-        'is_read': msg.is_read,
-        'reactions': [{'user_id': r.user_id, 'emoji': r.emoji} for r in Reaction.query.filter_by(message_id=msg.id).all()]
-    } for msg in messages]), 200
+    current_user_id = get_jwt_identity()
+    if not GroupMembers.query.filter_by(user_id=current_user_id, group_id=group_id).first():
+        return error_response("Not a group member", 403)
+
+    try:
+        messages = Message.query.filter_by(group_id=group_id).options(joinedload(Message.reactions)).order_by(Message.timestamp.asc()).all()
+        deleted_messages = {dm.message_id for dm in DeletedMessage.query.filter_by(user_id=current_user_id).all()}
+
+        return jsonify([{
+            'id': msg.id,
+            'sender_id': msg.sender_id,
+            'group_id': msg.group_id,
+            'content': msg.content,
+            'media_url': msg.media_url,
+            'timestamp': msg.timestamp.isoformat(),
+            'is_read': MessageReadStatus.query.filter_by(message_id=msg.id, user_id=current_user_id).first().is_read if MessageReadStatus.query.filter_by(message_id=msg.id, user_id=current_user_id).first() else False,
+            'reactions': [{'user_id': r.user_id, 'emoji': r.emoji} for r in msg.reactions]
+        } for msg in messages if msg.id not in deleted_messages]), 200
+    except Exception as e:
+        logger.error(f"Error fetching group messages: {str(e)}")
+        return error_response(str(e), 500)
 
 @app.route('/api/upload_media', methods=['POST'])
 def upload_media():
