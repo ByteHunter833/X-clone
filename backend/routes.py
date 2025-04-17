@@ -567,33 +567,57 @@ def on_join(data):
     join_room(room)
     emit('status', {'message': f'Joined room {room}'}, room=room)
 
-@socketio.on('leave')
-def on_leave(data):
-    user_id = data['user_id']
+@socketio.on('join')
+@jwt_required()
+def on_join(data):
+    user_id = get_jwt_identity()
     receiver_id = data.get('receiver_id')
     group_id = data.get('group_id')
 
-    if receiver_id:
-        room = f"chat_{min(user_id, receiver_id)}_{max(user_id, receiver_id)}"
-    else:
-        room = f"group_{group_id}"
+    if not (receiver_id or group_id):
+        emit('error', {'message': 'Invalid data'})
+        return
 
+    if group_id and not GroupMembers.query.filter_by(user_id=user_id, group_id=group_id).first():
+        emit('error', {'message': 'Not a group member'})
+        return
+
+    if receiver_id and Block.query.filter_by(blocker_id=receiver_id, blocked_id=user_id).first():
+        emit('error', {'message': 'You are blocked by this user'})
+        return
+
+    room = get_room_name(user_id, receiver_id, group_id)
+    join_room(room)
+    emit('status', {'message': f'Joined room {room}'}, room=room)
+    logger.info(f"User {user_id} joined room {room}")
+
+@socketio.on('leave')
+@jwt_required()
+def on_leave(data):
+    user_id = get_jwt_identity()
+    receiver_id = data.get('receiver_id')
+    group_id = data.get('group_id')
+
+    room = get_room_name(user_id, receiver_id, group_id)
     leave_room(room)
     emit('status', {'message': f'Left room {room}'}, room=room)
+    logger.info(f"User {user_id} left room {room}")
 
 @socketio.on('typing')
+@jwt_required()
 def handle_typing(data):
-    user_id = data['user_id']
+    user_id = get_jwt_identity()
     receiver_id = data.get('receiver_id')
     group_id = data.get('group_id')
 
-    if receiver_id:
-        room = f"chat_{min(user_id, receiver_id)}_{max(user_id, receiver_id)}"
-    else:
-        room = f"group_{group_id}"
-
     user = User.query.get(user_id)
+    if not user:
+        emit('error', {'message': 'User not found'})
+        return
+
+    room = get_room_name(user_id, receiver_id, group_id)
     emit('typing', {'username': user.username, 'is_typing': True}, room=room, skip_sid=request.sid)
+    logger.info(f"User {user_id} is typing in room {room}")
 
 @socketio.on('send_message')
 def handle_message(data):
