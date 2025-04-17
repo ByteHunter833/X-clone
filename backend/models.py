@@ -96,15 +96,18 @@ class View(db.Model):
 
 
 class Group(db.Model):
+    __tablename__ = 'groups'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     members = db.relationship('User', secondary='group_members')
 
 class GroupMembers(db.Model):
+    __tablename__ = 'group_members'
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), primary_key=True)
     group_id = db.Column(db.Integer, db.ForeignKey('group.id'), primary_key=True)
 
 class Message(db.Model):
+    __tablename__ = 'messages'
     id = db.Column(db.Integer, primary_key=True)
     sender_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     receiver_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
@@ -116,12 +119,14 @@ class Message(db.Model):
     deleted_for = db.Column(db.String(200), default='')
 
 class Reaction(db.Model):
+    __tablename__ = 'reactions'
     id = db.Column(db.Integer, primary_key=True)
     message_id = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     emoji = db.Column(db.String(10), nullable=False)
 
 class Block(db.Model):
+    __tablename__ = 'blocks'
     id = db.Column(db.Integer, primary_key=True)
     blocker_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     blocked_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
