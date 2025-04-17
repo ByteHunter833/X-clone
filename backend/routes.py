@@ -686,18 +686,36 @@ def handle_message(data):
         db.session.rollback()
         logger.error(f"Error sending message: {str(e)}")
         emit('error', {'message': 'Failed to send message'})
+
+
 @socketio.on('read_message')
+@jwt_required()
 def handle_read_message(data):
-    message_id = data['message_id']
-    user_id = data['user_id']
+    user_id = get_jwt_identity()
+    message_id = data.get('message_id')
 
     message = Message.query.get(message_id)
-    if message and (message.receiver_id == user_id or message.group_id):
-        message.is_read = True
-        db.session.commit()
+    if not message:
+        emit('error', {'message': 'Message not found'})
+        return
 
-        room = f"chat_{min(message.sender_id, message.receiver_id)}_{max(message.sender_id, message.receiver_id)}" if message.receiver_id else f"group_{message.group_id}"
+    try:
+        if message.receiver_id == user_id:
+            message.is_read = True
+            db.session.commit()
+        elif message.group_id:
+            read_status = MessageReadStatus.query.filter_by(message_id=message_id, user_id=user_id).first()
+            if read_status:
+                read_status.is_read = True
+                db.session.commit()
+
+        room = get_room_name(message.sender_id, message.receiver_id, message.group_id)
         emit('message_read', {'message_id': message_id, 'is_read': True}, room=room)
+        logger.info(f"Message {message_id} marked as read by user {user_id}")
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error marking message as read: {str(e)}")
+        emit('error', {'message': 'Failed to mark message as read'})
 
 @socketio.on('add_reaction')
 def handle_reaction(data):
