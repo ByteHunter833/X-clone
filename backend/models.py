@@ -10,7 +10,7 @@ class User(db.Model):
     full_name = db.Column(db.String(100))
     bio = db.Column(db.Text)
     profile_image_url = db.Column(db.Text)
-    user_id = db.Column(db.String, primary_key=True, nullable=False)
+    user_id = db.Column(db.Integer, primary_key=True, nullable=False)
     created_at = db.Column(db.DateTime(timezone=True), default=datetime.now)
 
     tweets = db.relationship('Tweet', backref='user', cascade='all, delete')
@@ -31,7 +31,7 @@ class User(db.Model):
 class Tweet(db.Model):
     __tablename__ = 'tweets'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.String, db.ForeignKey('users.user_id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=False)
     text_content = db.Column(db.Text, nullable=False)
     media_content = db.Column(db.Text)
     created_at = db.Column(db.DateTime(timezone=True), default=datetime.now)
@@ -103,15 +103,16 @@ class Group(db.Model):
 
 class GroupMembers(db.Model):
     __tablename__ = 'group_members'
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), primary_key=True)
-    group_id = db.Column(db.Integer, db.ForeignKey('group.id'), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), primary_key=True)  #
+
 
 class Message(db.Model):
     __tablename__ = 'messages'
     id = db.Column(db.Integer, primary_key=True)
-    sender_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    receiver_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
-    group_id = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=True)
+    sender_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=False)
+    receiver_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=True)
     content = db.Column(db.Text, nullable=True)
     media_url = db.Column(db.String(200), nullable=True)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
@@ -121,13 +122,19 @@ class Message(db.Model):
 class Reaction(db.Model):
     __tablename__ = 'reactions'
     id = db.Column(db.Integer, primary_key=True)
-    message_id = db.Column(db.Integer, db.ForeignKey('message.id'), nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    message_id = db.Column(db.Integer, db.ForeignKey('messages.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=False)
     emoji = db.Column(db.String(10), nullable=False)
 
 class Block(db.Model):
     __tablename__ = 'blocks'
     id = db.Column(db.Integer, primary_key=True)
-    blocker_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    blocked_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    blocker_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=False)
+    blocked_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=False)
 
+class MessageReadStatus(db.Model):
+    __tablename__ = 'message_read_status'
+    id = db.Column(db.Integer, primary_key=True)
+    message_id = db.Column(db.Integer, db.ForeignKey('message.id'))
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    is_read = db.Column(db.Boolean, default=False)
