@@ -785,36 +785,75 @@ def handle_delete_message(data):
     room = f"chat_{min(message.sender_id, message.receiver_id)}_{max(message.sender_id, message.receiver_id)}" if message.receiver_id else f"group_{message.group_id}"
     emit('message_deleted', {'message_id': message_id, 'delete_for_all': delete_for_all}, room=room)
 
-@socketio.on('edit_message')
-def handle_edit_message(data):
-    message_id = data['message_id']
-    user_id = data['user_id']
-    new_content = data['new_content']
 
-    message = Message.query.get(message_id)
-    if message.sender_id != user_id:
+@socketio.on('edit_message')
+@jwt_required()
+def handle_edit_message(data):
+    user_id = get_jwt_identity()
+    try:
+        validated_data = EditMessageSchema().load(data)
+    except ValidationError as err:
+        emit('error', {'message': err.messages})
         return
 
-    message.content = new_content
-    db.session.commit()
+    message_id = validated_data['message_id']
+    new_content = validated_data['new_content']
 
-    room = f"chat_{min(message.sender_id, message.receiver_id)}_{max(message.sender_id, message.receiver_id)}" if message.receiver_id else f"group_{message.group_id}"
-    emit('message_edited', {'message_id': message_id, 'new_content': new_content}, room=room)
+    message = Message.query.get(message_id)
+    if not message or message.sender_id != user_id:
+        emit('error', {'message': 'Unauthorized or message not found'})
+        return
 
+    try:
+        message.content = new_content
+        db.session.commit()
 
-@app.route('/api/block/<int:blocker_id>/<int:blocked_id>', methods=['POST'])
-def block_user(blocker_id, blocked_id):
+        room = get_room_name(message.sender_id, message.receiver_id, message.group_id)
+        emit('message_edited', {'message_id': message_id, 'new_content': new_content}, room=room)
+        logger.info(f"Message {message_id} edited by user {user_id}")
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error editing message: {str(e)}")
+        emit('error', {'message': 'Failed to edit message'})
+
+@app.route('/api/block/<int:blocked_id>', methods=['POST'])
+@jwt_required()
+def block_user(blocked_id):
+    blocker_id = get_jwt_identity()
     if blocker_id == blocked_id:
-        return jsonify({'error': 'Cannot block yourself'}), 400
+        return error_response("Cannot block yourself", 400)
 
-    block = Block(blocker_id=blocker_id, blocked_id=blocked_id)
-    db.session.add(block)
-    db.session.commit()
-    return jsonify({'message': 'User blocked'}), 200
+    if Block.query.filter_by(blocker_id=blocker_id, blocked_id=blocked_id).first():
+        return error_response("User already blocked", 400)
+
+    try:
+        block = Block(blocker_id=blocker_id, blocked_id=blocked_id)
+        db.session.add(block)
+        db.session.commit()
+        logger.info(f"User {blocker_id} blocked user {blocked_id}")
+        return jsonify({'message': 'User blocked'}), 200
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error blocking user: {str(e)}")
+        return error_response(str(e), 500)
 
 @app.route('/api/unread_count/<int:user_id>', methods=['GET'])
+@jwt_required()
 def unread_count(user_id):
-    unread = Message.query.filter(
-        (Message.receiver_id == user_id) & (Message.is_read == False)
-    ).count()
-    return jsonify({'unread_count': unread}), 200
+    if get_jwt_identity() != user_id:
+        return error_response("Unauthorized access", 403)
+
+    try:
+        cache_key = f"unread_count_{user_id}"
+        cached_count = redis.get(cache_key)
+        if cached_count:
+            return jsonify({'unread_count': int(cached_count)}), 200
+
+        unread = Message.query.filter(
+            (Message.receiver_id == user_id) & (Message.is_read == False)
+        ).count()
+        redis.setex(cache_key, 300, unread)  # 5 daqiqa kesh
+        return jsonify({'unread_count': unread}), 200
+    except Exception as e:
+        logger.error(f"Error fetching unread count: {str(e)}")
+        return error_response(str(e), 500)
