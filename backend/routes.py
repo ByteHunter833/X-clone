@@ -718,18 +718,35 @@ def handle_read_message(data):
         emit('error', {'message': 'Failed to mark message as read'})
 
 @socketio.on('add_reaction')
+@jwt_required()
 def handle_reaction(data):
-    message_id = data['message_id']
-    user_id = data['user_id']
-    emoji = data['emoji']
+    user_id = get_jwt_identity()
+    try:
+        validated_data = ReactionSchema().load(data)
+    except ValidationError as err:
+        emit('error', {'message': err.messages})
+        return
 
-    reaction = Reaction(message_id=message_id, user_id=user_id, emoji=emoji)
-    db.session.add(reaction)
-    db.session.commit()
+    message_id = validated_data['message_id']
+    emoji = validated_data['emoji']
 
     message = Message.query.get(message_id)
-    room = f"chat_{min(message.sender_id, message.receiver_id)}_{max(message.sender_id, message.receiver_id)}" if message.receiver_id else f"group_{message.group_id}"
-    emit('reaction_added', {'message_id': message_id, 'user_id': user_id, 'emoji': emoji}, room=room)
+    if not message:
+        emit('error', {'message': 'Message not found'})
+        return
+
+    try:
+        reaction = Reaction(message_id=message_id, user_id=user_id, emoji=emoji)
+        db.session.add(reaction)
+        db.session.commit()
+
+        room = get_room_name(message.sender_id, message.receiver_id, message.group_id)
+        emit('reaction_added', {'message_id': message_id, 'user_id': user_id, 'emoji': emoji}, room=room)
+        logger.info(f"Reaction {emoji} added to message {message_id} by user {user_id}")
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error adding reaction: {str(e)}")
+        emit('error', {'message': 'Failed to add reaction'})
 
 @socketio.on('delete_message')
 def handle_delete_message(data):
