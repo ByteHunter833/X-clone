@@ -104,7 +104,7 @@ class Group(db.Model):
 class GroupMembers(db.Model):
     __tablename__ = 'group_members'
     user_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), primary_key=True)
-    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), primary_key=True)  #
+    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), primary_key=True)
 
 
 class Message(db.Model):
@@ -138,3 +138,9 @@ class MessageReadStatus(db.Model):
     message_id = db.Column(db.Integer, db.ForeignKey('message.id'))
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     is_read = db.Column(db.Boolean, default=False)
+
+class DeletedMessage(db.Model):
+    __tablename__ = 'deleted_messages'
+    id = db.Column(db.Integer, primary_key=True)
+    message_id = db.Column(db.Integer, db.ForeignKey('messages.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=False)
