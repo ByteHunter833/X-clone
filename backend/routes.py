@@ -1,4 +1,6 @@
-from app import app, db , socketio
+import logging
+
+from app import app, db , socketio ,allowed_file, redis
 from flask_socketio import emit, join_room, leave_room
 from flask import request, jsonify, session
 from models import *
@@ -6,7 +8,10 @@ from werkzeug.utils import secure_filename
 import os
 from datetime import datetime
 from app import allowed_file
-
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from sqlalchemy.orm import joinedload
+from marshmallow import Schema, fields, ValidationError
+from models import *
 
 # register
 @app.route('/api/register', methods=['POST'])
@@ -396,13 +401,46 @@ def tweet_data(tweet_id):
     except:
         return jsonify({'status':'error', 'message':'Something went wrong'})
 
-      
-      
+
+
+
+logger = logging.getLogger(__name__)
+
+class CreateGroupSchema(Schema):
+    name = fields.Str(required=True, validate=lambda x: len(x) > 0)
+    member_ids = fields.List(fields.Int, required=True, validate=lambda x: len(x) > 0)
+
+class MessageSchema(Schema):
+    receiver_id = fields.Int(allow_none=True)
+    group_id = fields.Int(allow_none=True)
+    content = fields.Str(allow_none=True)
+    media_url = fields.Str(allow_none=True)
+
+class ReactionSchema(Schema):
+    message_id = fields.Int(required=True)
+    emoji = fields.Str(required=True, validate=lambda x: len(x) > 0)
+
+class DeleteMessageSchema(Schema):
+    message_id = fields.Int(required=True)
+    delete_for_all = fields.Boolean(default=False)
+
+class EditMessageSchema(Schema):
+    message_id = fields.Int(required=True)
+    new_content = fields.Str(required=True)
+
+def error_response(message, status_code):
+    return jsonify({'error': {'message': message, 'code': status_code}}), status_code
+
+def get_room_name(user_id=None, receiver_id=None, group_id=None):
+    if receiver_id:
+        return f"chat_{min(user_id, receiver_id)}_{max(user_id, receiver_id)}"
+    return f"group_{group_id}"
+
 @app.route('/api/create_group', methods=['POST'])
 def create_group():
     data = request.get_json()
     name = data.get('name')
-    member_ids = data.get('member_ids')  # [1, 2, 3]
+    member_ids = data.get('member_ids')
 
     group = Group(name=name)
     db.session.add(group)
