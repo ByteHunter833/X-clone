@@ -531,17 +531,27 @@ def get_group_messages(group_id):
         return error_response(str(e), 500)
 
 @app.route('/api/upload_media', methods=['POST'])
+@jwt_required()
 def upload_media():
+    MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
     if 'file' not in request.files:
-        return jsonify({'error': 'No file part'}), 400
+        return error_response("No file part in the request", 400)
 
     file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
+    if file.filename == '' or not allowed_file(file.filename):
+        return error_response("Invalid or no selected file", 400)
 
-    filename = f"{datetime.utcnow().timestamp()}_{file.filename}"
-    file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-    return jsonify({'media_url': f"/{app.config['UPLOAD_FOLDER']}/{filename}"}), 200
+    if file.content_length and file.content_length > MAX_FILE_SIZE:
+        return error_response("File size exceeds 5MB limit", 400)
+
+    try:
+        filename = f"{datetime.utcnow().timestamp()}_{secure_filename(file.filename)}"
+        file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        logger.info(f"File {filename} uploaded by user {get_jwt_identity()}")
+        return jsonify({'media_url': f"/Uploads/{filename}"}), 200
+    except Exception as e:
+        logger.error(f"Error uploading file: {str(e)}")
+        return error_response("Failed to upload file", 500)
 
 @socketio.on('join')
 def on_join(data):
