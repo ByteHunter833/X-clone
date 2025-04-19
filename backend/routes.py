@@ -820,14 +820,21 @@ def block_user(blocked_id):
 def unread_count(user_id):
     try:
         cache_key = f"unread_count_{user_id}"
-        cached_count = redis.get(cache_key)
-        if cached_count:
-            return jsonify({'unread_count': int(cached_count)}), 200
+        try:
+            cached_count = redis.get(cache_key)
+            if cached_count:
+                return jsonify({'unread_count': int(cached_count)}), 200
+        except Exception as redis_error:
+            logger.error(f"Redis error: {str(redis_error)}")
+            # Redis ishlamasa, to‘g‘ridan-to‘g‘ri bazadan hisoblaymiz
 
         unread = Messages.query.filter(
             (Messages.receiver_id == user_id) & (Messages.is_read == False)
         ).count()
-        redis.setex(cache_key, 300, unread)  # 5 daqiqa kesh
+        try:
+            redis.setex(cache_key, 300, unread)  # 5 daqiqa kesh
+        except Exception as redis_error:
+            logger.error(f"Redis set error: {str(redis_error)}")
         return jsonify({'unread_count': unread}), 200
     except Exception as e:
         logger.error(f"Error fetching unread count: {str(e)}")
