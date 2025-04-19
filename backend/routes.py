@@ -7,9 +7,7 @@ from werkzeug.utils import secure_filename
 import os
 from datetime import datetime
 from app import allowed_file
-from flask_jwt_extended import jwt_required, get_jwt_identity, create_access_token
 from sqlalchemy.orm import joinedload
-from marshmallow import Schema, fields, ValidationError
 from models import *
 
 # register
@@ -97,13 +95,10 @@ def login():
             return jsonify({'status': 'error', 'message': 'user not found'}), 404
 
         if user.check_password(password):
-            # JWT token yaratish
-            access_token = create_access_token(identity=user.user_id)
             logger.info(f"User {user.username} logged in successfully")
             return jsonify({
                 'status': 'success',
                 'message': 'successfully logged in',
-                'access_token': access_token,
                 'user': {
                     'user_id': user.user_id,
                     'username': user.username,
@@ -423,38 +418,39 @@ def get_room_name(user_id=None, receiver_id=None, group_id=None):
 
 # Guruh yaratish
 @app.route('/api/create_group', methods=['POST'])
-@jwt_required()
 def create_group():
-    current_user_id = get_jwt_identity()
     data = request.get_json()
 
-    # Qo'lda validatsiya
     if not data or 'name' not in data or not isinstance(data['name'], str) or len(data['name'].strip()) == 0:
         return error_response("Group name is required and must be a non-empty string", 400)
     if 'member_ids' not in data or not isinstance(data['member_ids'], list) or len(data['member_ids']) == 0:
         return error_response("Member IDs are required and must be a non-empty list", 400)
     if not all(isinstance(user_id, int) for user_id in data['member_ids']):
         return error_response("All member IDs must be integers", 400)
+    if 'creator_id' not in data or not isinstance(data['creator_id'], int):
+        return error_response("Creator ID is required and must be an integer", 400)
+
+    creator_id = data['creator_id']
+    member_ids = data['member_ids']
+
+    # creator_id ni member_ids ga qo‘shish, lekin takrorlanmasligini ta'minlash
+    all_members = set(member_ids)  # Takrorlanishni oldini olish uchun set ishlatamiz
+    all_members.add(creator_id)  # creator_id ni qo‘shamiz
 
     try:
         group = Group(name=data['name'].strip())
         db.session.add(group)
         db.session.commit()
 
-        # Foydalanuvchilarni guruhga qo'shish
-        for user_id in data['member_ids']:
+        for user_id in all_members:
             if not User.query.get(user_id):
                 db.session.rollback()
                 return error_response(f"User {user_id} not found", 404)
             member = GroupMembers(user_id=user_id, group_id=group.id)
             db.session.add(member)
 
-        # Guruh yaratuvchisini qo'shish
-        member = GroupMembers(user_id=current_user_id, group_id=group.id)
-        db.session.add(member)
-
         db.session.commit()
-        logger.info(f"Group {group.name} created by user {current_user_id}")
+        logger.info(f"Group {group.name} created by user {creator_id}")
         return jsonify({'message': 'Group created', 'group_id': group.id}), 201
     except Exception as e:
         db.session.rollback()
@@ -463,21 +459,12 @@ def create_group():
 
 # 1:1 xabarlarni olish
 @app.route('/api/messages/<int:user_id>/<int:receiver_id>', methods=['GET'])
-@jwt_required()
 def get_messages(user_id, receiver_id):
-    current_user_id = get_jwt_identity()
-    if current_user_id != user_id:
-        return error_response("Unauthorized access", 403)
-
-    # Bloklanganligini tekshirish
-    if Block.query.filter_by(blocker_id=receiver_id, blocked_id=user_id).first():
-        return error_response("You are blocked by this user", 403)
-
     try:
-        messages = Message.query.filter(
-            ((Message.sender_id == user_id) & (Message.receiver_id == receiver_id)) |
-            ((Message.sender_id == receiver_id) & (Message.receiver_id == user_id))
-        ).filter(Message.group_id == None).options(joinedload(Message.reactions)).order_by(Message.timestamp.asc()).all()
+        messages = Messages.query.filter(
+            ((Messages.sender_id == user_id) & (Messages.receiver_id == receiver_id)) |
+            ((Messages.sender_id == receiver_id) & (Messages.receiver_id == user_id))
+        ).filter(Messages.group_id == None).options(joinedload(Messages.reactions)).order_by(Messages.timestamp.asc()).all()
 
         deleted_messages = {dm.message_id for dm in DeletedMessage.query.filter_by(user_id=user_id).all()}
 
@@ -497,15 +484,14 @@ def get_messages(user_id, receiver_id):
 
 # Guruh xabarlarni olish
 @app.route('/api/group_messages/<int:group_id>', methods=['GET'])
-@jwt_required()
 def get_group_messages(group_id):
-    current_user_id = get_jwt_identity()
-    if not GroupMembers.query.filter_by(user_id=current_user_id, group_id=group_id).first():
-        return error_response("Not a group member", 403)
+    user_id = request.args.get('user_id', type=int)
+    if not user_id:
+        return error_response("User ID is required as a query parameter", 400)
 
     try:
-        messages = Message.query.filter_by(group_id=group_id).options(joinedload(Message.reactions)).order_by(Message.timestamp.asc()).all()
-        deleted_messages = {dm.message_id for dm in DeletedMessage.query.filter_by(user_id=current_user_id).all()}
+        messages = Messages.query.filter_by(group_id=group_id).options(joinedload(Messages.reactions)).order_by(Messages.timestamp.asc()).all()
+        deleted_messages = {dm.message_id for dm in DeletedMessage.query.filter_by(user_id=user_id).all()}
 
         return jsonify([{
             'id': msg.id,
@@ -514,7 +500,7 @@ def get_group_messages(group_id):
             'content': msg.content,
             'media_url': msg.media_url,
             'timestamp': msg.timestamp.isoformat(),
-            'is_read': MessageReadStatus.query.filter_by(message_id=msg.id, user_id=current_user_id).first().is_read if MessageReadStatus.query.filter_by(message_id=msg.id, user_id=current_user_id).first() else False,
+            'is_read': MessageReadStatus.query.filter_by(message_id=msg.id, user_id=user_id).first().is_read if MessageReadStatus.query.filter_by(message_id=msg.id, user_id=user_id).first() else False,
             'reactions': [{'user_id': r.user_id, 'emoji': r.emoji} for r in msg.reactions]
         } for msg in messages if msg.id not in deleted_messages]), 200
     except Exception as e:
@@ -523,7 +509,6 @@ def get_group_messages(group_id):
 
 # Media fayl yuklash
 @app.route('/api/upload_media', methods=['POST'])
-@jwt_required()
 def upload_media():
     MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
     if 'file' not in request.files:
@@ -539,7 +524,7 @@ def upload_media():
     try:
         filename = f"{datetime.utcnow().timestamp()}_{secure_filename(file.filename)}"
         file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-        logger.info(f"File {filename} uploaded by user {get_jwt_identity()}")
+        logger.info(f"File {filename} uploaded")
         return jsonify({'media_url': f"/Uploads/{filename}"}), 200
     except Exception as e:
         logger.error(f"Error uploading file: {str(e)}")
@@ -547,22 +532,17 @@ def upload_media():
 
 # Socket.IO eventlari
 @socketio.on('join')
-@jwt_required()
 def on_join(data):
-    user_id = get_jwt_identity()
+    user_id = data.get('user_id')
+    if not user_id or not isinstance(user_id, int):
+        emit('error', {'message': 'User ID is required and must be an integer'})
+        return
+
     receiver_id = data.get('receiver_id')
     group_id = data.get('group_id')
 
     if not (receiver_id or group_id):
         emit('error', {'message': 'Invalid data: receiver_id or group_id required'})
-        return
-
-    if group_id and not GroupMembers.query.filter_by(user_id=user_id, group_id=group_id).first():
-        emit('error', {'message': 'Not a group member'})
-        return
-
-    if receiver_id and Block.query.filter_by(blocker_id=receiver_id, blocked_id=user_id).first():
-        emit('error', {'message': 'You are blocked by this user'})
         return
 
     room = get_room_name(user_id, receiver_id, group_id)
@@ -571,9 +551,12 @@ def on_join(data):
     logger.info(f"User {user_id} joined room {room}")
 
 @socketio.on('leave')
-@jwt_required()
 def on_leave(data):
-    user_id = get_jwt_identity()
+    user_id = data.get('user_id')
+    if not user_id or not isinstance(user_id, int):
+        emit('error', {'message': 'User ID is required and must be an integer'})
+        return
+
     receiver_id = data.get('receiver_id')
     group_id = data.get('group_id')
 
@@ -583,9 +566,12 @@ def on_leave(data):
     logger.info(f"User {user_id} left room {room}")
 
 @socketio.on('typing')
-@jwt_required()
 def handle_typing(data):
-    user_id = get_jwt_identity()
+    user_id = data.get('user_id')
+    if not user_id or not isinstance(user_id, int):
+        emit('error', {'message': 'User ID is required and must be an integer'})
+        return
+
     receiver_id = data.get('receiver_id')
     group_id = data.get('group_id')
 
@@ -599,11 +585,12 @@ def handle_typing(data):
     logger.info(f"User {user_id} is typing in room {room}")
 
 @socketio.on('send_message')
-@jwt_required()
 def handle_message(data):
-    sender_id = get_jwt_identity()
+    sender_id = data.get('sender_id')
+    if not sender_id or not isinstance(sender_id, int):
+        emit('error', {'message': 'Sender ID is required and must be an integer'})
+        return
 
-    # Qo'lda validatsiya
     receiver_id = data.get('receiver_id')
     group_id = data.get('group_id')
     content = data.get('content')
@@ -625,18 +612,8 @@ def handle_message(data):
         emit('error', {'message': 'Group ID must be an integer'})
         return
 
-    # Bloklanganligini tekshirish
-    if receiver_id and Block.query.filter_by(blocker_id=receiver_id, blocked_id=sender_id).first():
-        emit('error', {'message': 'You are blocked by this user'})
-        return
-
-    # Guruh a'zoligini tekshirish
-    if group_id and not GroupMembers.query.filter_by(user_id=sender_id, group_id=group_id).first():
-        emit('error', {'message': 'Not a group member'})
-        return
-
     try:
-        new_message = Message(
+        new_message = Messages(
             sender_id=sender_id,
             receiver_id=receiver_id,
             group_id=group_id,
@@ -646,7 +623,6 @@ def handle_message(data):
         db.session.add(new_message)
         db.session.commit()
 
-        # Guruh xabarlari uchun o'qilgan statusini yaratish
         if group_id:
             members = GroupMembers.query.filter_by(group_id=group_id).all()
             for member in members:
@@ -675,16 +651,18 @@ def handle_message(data):
         emit('error', {'message': 'Failed to send message'})
 
 @socketio.on('read_message')
-@jwt_required()
 def handle_read_message(data):
-    user_id = get_jwt_identity()
-    message_id = data.get('message_id')
+    user_id = data.get('user_id')
+    if not user_id or not isinstance(user_id, int):
+        emit('error', {'message': 'User ID is required and must be an integer'})
+        return
 
+    message_id = data.get('message_id')
     if not isinstance(message_id, int):
         emit('error', {'message': 'Message ID must be an integer'})
         return
 
-    message = Message.query.get(message_id)
+    message = Messages.query.get(message_id)
     if not message:
         emit('error', {'message': 'Message not found'})
         return
@@ -708,13 +686,15 @@ def handle_read_message(data):
         emit('error', {'message': 'Failed to mark message as read'})
 
 @socketio.on('add_reaction')
-@jwt_required()
 def handle_reaction(data):
-    user_id = get_jwt_identity()
+    user_id = data.get('user_id')
+    if not user_id or not isinstance(user_id, int):
+        emit('error', {'message': 'User ID is required and must be an integer'})
+        return
+
     message_id = data.get('message_id')
     emoji = data.get('emoji')
 
-    # Qo'lda validatsiya
     if not isinstance(message_id, int):
         emit('error', {'message': 'Message ID must be an integer'})
         return
@@ -722,7 +702,7 @@ def handle_reaction(data):
         emit('error', {'message': 'Emoji must be a non-empty string'})
         return
 
-    message = Message.query.get(message_id)
+    message = Messages.query.get(message_id)
     if not message:
         emit('error', {'message': 'Message not found'})
         return
@@ -741,13 +721,15 @@ def handle_reaction(data):
         emit('error', {'message': 'Failed to add reaction'})
 
 @socketio.on('delete_message')
-@jwt_required()
 def handle_delete_message(data):
-    user_id = get_jwt_identity()
+    user_id = data.get('user_id')
+    if not user_id or not isinstance(user_id, int):
+        emit('error', {'message': 'User ID is required and must be an integer'})
+        return
+
     message_id = data.get('message_id')
     delete_for_all = data.get('delete_for_all', False)
 
-    # Qo'lda validatsiya
     if not isinstance(message_id, int):
         emit('error', {'message': 'Message ID must be an integer'})
         return
@@ -755,7 +737,7 @@ def handle_delete_message(data):
         emit('error', {'message': 'delete_for_all must be a boolean'})
         return
 
-    message = Message.query.get(message_id)
+    message = Messages.query.get(message_id)
     if not message or message.sender_id != user_id:
         emit('error', {'message': 'Unauthorized or message not found'})
         return
@@ -777,13 +759,15 @@ def handle_delete_message(data):
         emit('error', {'message': 'Failed to delete message'})
 
 @socketio.on('edit_message')
-@jwt_required()
 def handle_edit_message(data):
-    user_id = get_jwt_identity()
+    user_id = data.get('user_id')
+    if not user_id or not isinstance(user_id, int):
+        emit('error', {'message': 'User ID is required and must be an integer'})
+        return
+
     message_id = data.get('message_id')
     new_content = data.get('new_content')
 
-    # Qo'lda validatsiya
     if not isinstance(message_id, int):
         emit('error', {'message': 'Message ID must be an integer'})
         return
@@ -791,7 +775,7 @@ def handle_edit_message(data):
         emit('error', {'message': 'New content must be a non-empty string'})
         return
 
-    message = Message.query.get(message_id)
+    message = Messages.query.get(message_id)
     if not message or message.sender_id != user_id:
         emit('error', {'message': 'Unauthorized or message not found'})
         return
@@ -809,9 +793,12 @@ def handle_edit_message(data):
         emit('error', {'message': 'Failed to edit message'})
 
 @app.route('/api/block/<int:blocked_id>', methods=['POST'])
-@jwt_required()
 def block_user(blocked_id):
-    blocker_id = get_jwt_identity()
+    data = request.get_json()
+    if not data or 'blocker_id' not in data or not isinstance(data['blocker_id'], int):
+        return error_response("Blocker ID is required and must be an integer", 400)
+
+    blocker_id = data['blocker_id']
     if blocker_id == blocked_id:
         return error_response("Cannot block yourself", 400)
 
@@ -830,19 +817,15 @@ def block_user(blocked_id):
         return error_response(str(e), 500)
 
 @app.route('/api/unread_count/<int:user_id>', methods=['GET'])
-@jwt_required()
 def unread_count(user_id):
-    if get_jwt_identity() != user_id:
-        return error_response("Unauthorized access", 403)
-
     try:
         cache_key = f"unread_count_{user_id}"
         cached_count = redis.get(cache_key)
         if cached_count:
             return jsonify({'unread_count': int(cached_count)}), 200
 
-        unread = Message.query.filter(
-            (Message.receiver_id == user_id) & (Message.is_read == False)
+        unread = Messages.query.filter(
+            (Messages.receiver_id == user_id) & (Messages.is_read == False)
         ).count()
         redis.setex(cache_key, 300, unread)  # 5 daqiqa kesh
         return jsonify({'unread_count': unread}), 200

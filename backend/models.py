@@ -1,3 +1,5 @@
+from enum import unique
+
 from app import db
 from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -98,16 +100,17 @@ class View(db.Model):
 class Group(db.Model):
     __tablename__ = 'groups'
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
+    name = db.Column(db.String(100), unique=True, nullable=False)
     members = db.relationship('User', secondary='group_members')
 
 class GroupMembers(db.Model):
     __tablename__ = 'group_members'
     user_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), primary_key=True)
     group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), primary_key=True)
+    __table_args__ = (db.UniqueConstraint('user_id', 'group_id', name='uix_user_group'),)
 
-class Message(db.Model):
-    __tablename__ = 'messages'
+class Messages(db.Model):
+    __tablename__ = 'message'
     id = db.Column(db.Integer, primary_key=True)
     sender_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=False)
     receiver_id = db.Column(db.Integer, db.ForeignKey('users.user_id'))
