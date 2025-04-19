@@ -20,8 +20,9 @@ CORS(app,
 
 
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///test.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False 
-db = SQLAlchemy(app)
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['JWT_SECRET_KEY'] = 'X7y9zW2kQ8vL3mP6rT9uN4bJ0xF5cA1dE2gH'
+
 
 # Make sure uploads folder exists and is absolute
 UPLOAD_FOLDER = os.path.abspath(os.path.join(os.path.dirname(__file__), 'uploads'))

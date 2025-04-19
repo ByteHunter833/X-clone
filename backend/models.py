@@ -106,18 +106,17 @@ class GroupMembers(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), primary_key=True)
     group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), primary_key=True)
 
-
 class Message(db.Model):
     __tablename__ = 'messages'
     id = db.Column(db.Integer, primary_key=True)
     sender_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=False)
-    receiver_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=True)
-    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'), nullable=True)
-    content = db.Column(db.Text, nullable=True)
-    media_url = db.Column(db.String(200), nullable=True)
+    receiver_id = db.Column(db.Integer, db.ForeignKey('users.user_id'))
+    group_id = db.Column(db.Integer, db.ForeignKey('groups.id'))
+    content = db.Column(db.Text)
+    media_url = db.Column(db.String(200))
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     is_read = db.Column(db.Boolean, default=False)
-    deleted_for = db.Column(db.String(200), default='')
+    reactions = db.relationship('Reaction', backref='message')
 
 class Reaction(db.Model):
     __tablename__ = 'reactions'
@@ -132,15 +131,15 @@ class Block(db.Model):
     blocker_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=False)
     blocked_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=False)
 
-class MessageReadStatus(db.Model):
-    __tablename__ = 'message_read_status'
-    id = db.Column(db.Integer, primary_key=True)
-    message_id = db.Column(db.Integer, db.ForeignKey('message.id'))
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-    is_read = db.Column(db.Boolean, default=False)
-
 class DeletedMessage(db.Model):
     __tablename__ = 'deleted_messages'
     id = db.Column(db.Integer, primary_key=True)
     message_id = db.Column(db.Integer, db.ForeignKey('messages.id'), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=False)
+
+class MessageReadStatus(db.Model):
+    __tablename__ = 'message_read_status'
+    id = db.Column(db.Integer, primary_key=True)
+    message_id = db.Column(db.Integer, db.ForeignKey('messages.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=False)
+    is_read = db.Column(db.Boolean, default=False)

@@ -1,14 +1,13 @@
 import logging
 
-from app import app, db , socketio ,allowed_file, redis
+from app import app, db , socketio , redis
 from flask_socketio import emit, join_room, leave_room
 from flask import request, jsonify, session
-from models import *
 from werkzeug.utils import secure_filename
 import os
 from datetime import datetime
 from app import allowed_file
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import jwt_required, get_jwt_identity, create_access_token
 from sqlalchemy.orm import joinedload
 from marshmallow import Schema, fields, ValidationError
 from models import *
@@ -80,36 +79,44 @@ def register():
 # login
 @app.route("/api/login", methods=["POST"])
 def login():
-    data = request.json
+    data = request.get_json()  # request.json o'rniga get_json()
     username = data.get("username")
     email = data.get("email")
     password = data.get("password")
 
-    if username:
-        user = User.query.filter_by(username=username).first()
-    elif email:
-        user = User.query.filter_by(email=email).first()
-    else:
-        return jsonify({'status': 'error', 'message': 'username or email required'})
+    if not username and not email:
+        return jsonify({'status': 'error', 'message': 'username or email required'}), 400
 
-    # Add this check
-    if not user:
-        return jsonify({'status': 'error', 'message': 'user not found'})
+    try:
+        if username:
+            user = User.query.filter_by(username=username).first()
+        else:
+            user = User.query.filter_by(email=email).first()
 
-    if user.check_password(password):
-        return jsonify({
-            'status': 'success',
-            'message': 'successfully logged in',
-            'user': {
-                'user_id': user.user_id,
-                'username': user.username,
-                'email': user.email,
-                'full_name': user.full_name,
-                'profile_image_url': user.profile_image_url
-            }
-        })
-    else:
-        return jsonify({'status': 'error', 'message': 'credentials do not match'})
+        if not user:
+            return jsonify({'status': 'error', 'message': 'user not found'}), 404
+
+        if user.check_password(password):
+            # JWT token yaratish
+            access_token = create_access_token(identity=user.user_id)
+            logger.info(f"User {user.username} logged in successfully")
+            return jsonify({
+                'status': 'success',
+                'message': 'successfully logged in',
+                'access_token': access_token,
+                'user': {
+                    'user_id': user.user_id,
+                    'username': user.username,
+                    'email': user.email,
+                    'full_name': user.full_name,
+                    'profile_image_url': user.profile_image_url
+                }
+            }), 200
+        else:
+            return jsonify({'status': 'error', 'message': 'credentials do not match'}), 401
+    except Exception as e:
+        logger.error(f"Error logging in: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 @app.route("/api/auth/logout", methods=["POST"])
@@ -403,50 +410,34 @@ def tweet_data(tweet_id):
 
 
 
-
 logger = logging.getLogger(__name__)
-
-class CreateGroupSchema(Schema):
-    name = fields.Str(required=True, validate=lambda x: len(x) > 0)
-    member_ids = fields.List(fields.Int, required=True, validate=lambda x: len(x) > 0)
-
-class MessageSchema(Schema):
-    receiver_id = fields.Int(allow_none=True)
-    group_id = fields.Int(allow_none=True)
-    content = fields.Str(allow_none=True)
-    media_url = fields.Str(allow_none=True)
-
-class ReactionSchema(Schema):
-    message_id = fields.Int(required=True)
-    emoji = fields.Str(required=True, validate=lambda x: len(x) > 0)
-
-class DeleteMessageSchema(Schema):
-    message_id = fields.Int(required=True)
-    delete_for_all = fields.Boolean(default=False)
-
-class EditMessageSchema(Schema):
-    message_id = fields.Int(required=True)
-    new_content = fields.Str(required=True)
 
 def error_response(message, status_code):
     return jsonify({'error': {'message': message, 'code': status_code}}), status_code
 
+# Xona nomini aniqlash funksiyasi
 def get_room_name(user_id=None, receiver_id=None, group_id=None):
     if receiver_id:
         return f"chat_{min(user_id, receiver_id)}_{max(user_id, receiver_id)}"
     return f"group_{group_id}"
 
+# Guruh yaratish
 @app.route('/api/create_group', methods=['POST'])
 @jwt_required()
 def create_group():
     current_user_id = get_jwt_identity()
-    try:
-        data = CreateGroupSchema().load(request.get_json())
-    except ValidationError as err:
-        return error_response(err.messages, 400)
+    data = request.get_json()
+
+    # Qo'lda validatsiya
+    if not data or 'name' not in data or not isinstance(data['name'], str) or len(data['name'].strip()) == 0:
+        return error_response("Group name is required and must be a non-empty string", 400)
+    if 'member_ids' not in data or not isinstance(data['member_ids'], list) or len(data['member_ids']) == 0:
+        return error_response("Member IDs are required and must be a non-empty list", 400)
+    if not all(isinstance(user_id, int) for user_id in data['member_ids']):
+        return error_response("All member IDs must be integers", 400)
 
     try:
-        group = Group(name=data['name'])
+        group = Group(name=data['name'].strip())
         db.session.add(group)
         db.session.commit()
 
@@ -470,6 +461,7 @@ def create_group():
         logger.error(f"Error creating group: {str(e)}")
         return error_response(str(e), 500)
 
+# 1:1 xabarlarni olish
 @app.route('/api/messages/<int:user_id>/<int:receiver_id>', methods=['GET'])
 @jwt_required()
 def get_messages(user_id, receiver_id):
@@ -503,8 +495,7 @@ def get_messages(user_id, receiver_id):
         logger.error(f"Error fetching messages: {str(e)}")
         return error_response(str(e), 500)
 
-
-
+# Guruh xabarlarni olish
 @app.route('/api/group_messages/<int:group_id>', methods=['GET'])
 @jwt_required()
 def get_group_messages(group_id):
@@ -530,6 +521,7 @@ def get_group_messages(group_id):
         logger.error(f"Error fetching group messages: {str(e)}")
         return error_response(str(e), 500)
 
+# Media fayl yuklash
 @app.route('/api/upload_media', methods=['POST'])
 @jwt_required()
 def upload_media():
@@ -553,20 +545,7 @@ def upload_media():
         logger.error(f"Error uploading file: {str(e)}")
         return error_response("Failed to upload file", 500)
 
-@socketio.on('join')
-def on_join(data):
-    user_id = data['user_id']
-    receiver_id = data.get('receiver_id')  # 1:1 chat uchun
-    group_id = data.get('group_id')  # Guruh chat uchun
-
-    if receiver_id:
-        room = f"chat_{min(user_id, receiver_id)}_{max(user_id, receiver_id)}"
-    else:
-        room = f"group_{group_id}"
-
-    join_room(room)
-    emit('status', {'message': f'Joined room {room}'}, room=room)
-
+# Socket.IO eventlari
 @socketio.on('join')
 @jwt_required()
 def on_join(data):
@@ -575,7 +554,7 @@ def on_join(data):
     group_id = data.get('group_id')
 
     if not (receiver_id or group_id):
-        emit('error', {'message': 'Invalid data'})
+        emit('error', {'message': 'Invalid data: receiver_id or group_id required'})
         return
 
     if group_id and not GroupMembers.query.filter_by(user_id=user_id, group_id=group_id).first():
@@ -623,19 +602,27 @@ def handle_typing(data):
 @jwt_required()
 def handle_message(data):
     sender_id = get_jwt_identity()
-    try:
-        validated_data = MessageSchema().load(data)
-    except ValidationError as err:
-        emit('error', {'message': err.messages})
-        return
 
-    receiver_id = validated_data.get('receiver_id')
-    group_id = validated_data.get('group_id')
-    content = validated_data.get('content')
-    media_url = validated_data.get('media_url')
+    # Qo'lda validatsiya
+    receiver_id = data.get('receiver_id')
+    group_id = data.get('group_id')
+    content = data.get('content')
+    media_url = data.get('media_url')
 
     if not (content or media_url):
         emit('error', {'message': 'Content or media_url is required'})
+        return
+    if content and not isinstance(content, str):
+        emit('error', {'message': 'Content must be a string'})
+        return
+    if media_url and not isinstance(media_url, str):
+        emit('error', {'message': 'Media URL must be a string'})
+        return
+    if receiver_id and not isinstance(receiver_id, int):
+        emit('error', {'message': 'Receiver ID must be an integer'})
+        return
+    if group_id and not isinstance(group_id, int):
+        emit('error', {'message': 'Group ID must be an integer'})
         return
 
     # Bloklanganligini tekshirish
@@ -687,12 +674,15 @@ def handle_message(data):
         logger.error(f"Error sending message: {str(e)}")
         emit('error', {'message': 'Failed to send message'})
 
-
 @socketio.on('read_message')
 @jwt_required()
 def handle_read_message(data):
     user_id = get_jwt_identity()
     message_id = data.get('message_id')
+
+    if not isinstance(message_id, int):
+        emit('error', {'message': 'Message ID must be an integer'})
+        return
 
     message = Message.query.get(message_id)
     if not message:
@@ -721,14 +711,16 @@ def handle_read_message(data):
 @jwt_required()
 def handle_reaction(data):
     user_id = get_jwt_identity()
-    try:
-        validated_data = ReactionSchema().load(data)
-    except ValidationError as err:
-        emit('error', {'message': err.messages})
-        return
+    message_id = data.get('message_id')
+    emoji = data.get('emoji')
 
-    message_id = validated_data['message_id']
-    emoji = validated_data['emoji']
+    # Qo'lda validatsiya
+    if not isinstance(message_id, int):
+        emit('error', {'message': 'Message ID must be an integer'})
+        return
+    if not isinstance(emoji, str) or len(emoji.strip()) == 0:
+        emit('error', {'message': 'Emoji must be a non-empty string'})
+        return
 
     message = Message.query.get(message_id)
     if not message:
@@ -736,7 +728,7 @@ def handle_reaction(data):
         return
 
     try:
-        reaction = Reaction(message_id=message_id, user_id=user_id, emoji=emoji)
+        reaction = Reaction(message_id=message_id, user_id=user_id, emoji=emoji.strip())
         db.session.add(reaction)
         db.session.commit()
 
@@ -752,14 +744,16 @@ def handle_reaction(data):
 @jwt_required()
 def handle_delete_message(data):
     user_id = get_jwt_identity()
-    try:
-        validated_data = DeleteMessageSchema().load(data)
-    except ValidationError as err:
-        emit('error', {'message': err.messages})
-        return
+    message_id = data.get('message_id')
+    delete_for_all = data.get('delete_for_all', False)
 
-    message_id = validated_data['message_id']
-    delete_for_all = validated_data['delete_for_all']
+    # Qo'lda validatsiya
+    if not isinstance(message_id, int):
+        emit('error', {'message': 'Message ID must be an integer'})
+        return
+    if not isinstance(delete_for_all, bool):
+        emit('error', {'message': 'delete_for_all must be a boolean'})
+        return
 
     message = Message.query.get(message_id)
     if not message or message.sender_id != user_id:
@@ -782,22 +776,20 @@ def handle_delete_message(data):
         logger.error(f"Error deleting message: {str(e)}")
         emit('error', {'message': 'Failed to delete message'})
 
-    room = f"chat_{min(message.sender_id, message.receiver_id)}_{max(message.sender_id, message.receiver_id)}" if message.receiver_id else f"group_{message.group_id}"
-    emit('message_deleted', {'message_id': message_id, 'delete_for_all': delete_for_all}, room=room)
-
-
 @socketio.on('edit_message')
 @jwt_required()
 def handle_edit_message(data):
     user_id = get_jwt_identity()
-    try:
-        validated_data = EditMessageSchema().load(data)
-    except ValidationError as err:
-        emit('error', {'message': err.messages})
-        return
+    message_id = data.get('message_id')
+    new_content = data.get('new_content')
 
-    message_id = validated_data['message_id']
-    new_content = validated_data['new_content']
+    # Qo'lda validatsiya
+    if not isinstance(message_id, int):
+        emit('error', {'message': 'Message ID must be an integer'})
+        return
+    if not isinstance(new_content, str) or len(new_content.strip()) == 0:
+        emit('error', {'message': 'New content must be a non-empty string'})
+        return
 
     message = Message.query.get(message_id)
     if not message or message.sender_id != user_id:
@@ -805,7 +797,7 @@ def handle_edit_message(data):
         return
 
     try:
-        message.content = new_content
+        message.content = new_content.strip()
         db.session.commit()
 
         room = get_room_name(message.sender_id, message.receiver_id, message.group_id)
