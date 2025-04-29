@@ -10,28 +10,28 @@ from app import allowed_file
 
 
 
-@app.route("/api/auth/check-user", methods = ["POST"])
-def check_user():
-    data = request.get_json()
-    email = data.get("email")
-    full_name = data.get("name")
-    user = User.query.filter_by(email=email, full_name=full_name).first()
-    if not user :
-        return jsonify({
-            'status': 'error',
-            'message': 'user not found'
-        })
-    return jsonify({
-        'status': 'success',
-        'message': 'user found',
-        'user': {
-            'user_id': user.user_id,
-            'username': user.username,
-            'email': user.email,
-            'full_name': user.full_name,
-            'profile_image_url': user.profile_image_url
-        }
-    })
+# @app.route("/api/auth/check-user", methods = ["POST"])
+# def check_user():
+#     data = request.get_json()
+#     email = data.get("email")
+#     full_name = data.get("name")
+#     user = User.query.filter_by(email=email, full_name=full_name).first()
+#     if not user :
+#         return jsonify({
+#             'status': 'error',
+#             'message': 'user not found'
+#         })
+#     return jsonify({
+#         'status': 'success',
+#         'message': 'user found',
+#         'user': {
+#             'user_id': user.user_id,
+#             'username': user.username,
+#             'email': user.email,
+#             'full_name': user.full_name,
+#             'profile_image_url': user.profile_image_url
+#         }
+#     })
 
 @app.route('/api/register', methods=['POST'])
 def register():

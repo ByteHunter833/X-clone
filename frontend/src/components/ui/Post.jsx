@@ -14,6 +14,7 @@ const Post = ({
 	id,
 	onBookmarkToggle,
 	onLikeToggle,
+	onPostDeleted,
 }) => {
 	const [isModalOpen, setIsModalOpen] = useState(false)
 	const navigate = useNavigate()

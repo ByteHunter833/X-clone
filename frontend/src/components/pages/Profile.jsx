@@ -585,9 +585,10 @@ const Posts = () => {
 						<Post
 							key={post.id}
 							username={post.user.username}
+							// username={`@${post.user.username}`}
 							content={post.text_content}
 							time={post.created_at}
-							handle={post.user.username}
+							handle={`@${post.user.username}`}
 							avatar={post.user.profile_image_url}
 							media={post.media_content}
 							id={post.id}

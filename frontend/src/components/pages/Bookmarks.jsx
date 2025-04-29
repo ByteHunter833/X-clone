@@ -116,7 +116,7 @@ const Bookmarks = () => {
 						<Post
 							key={bookmark.id}
 							username={bookmark.user.username}
-							handle={bookmark.user.username}
+							handle={`@${bookmark.user.username}`}
 							time={bookmark.created_at}
 							content={bookmark.text_content}
 							media={bookmark.media_content}
