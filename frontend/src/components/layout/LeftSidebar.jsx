@@ -10,9 +10,9 @@ import {
 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
+import GrokIcon from '../ui/GrokIcon'
 import LogoutModal from '../ui/LogoutModal'
 import MoreModal from '../ui/MoreModal'
-import PostModal from '../ui/PostModal'
 
 const LeftSidebar = ({ openPostModal }) => {
 	const [isMoreModalOpen, setIsMoreModalOpen] = useState(false)
@@ -57,6 +57,7 @@ const LeftSidebar = ({ openPostModal }) => {
 					text='Notifications'
 					active={location.pathname === '/notifications'}
 				/>
+				<NavItem to='/grok' icon={<GrokIcon />} text='Grok' />
 				<NavItem
 					to='/messages'
 					icon={<Mail className='h-7 w-7' />}

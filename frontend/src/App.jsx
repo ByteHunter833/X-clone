@@ -13,12 +13,13 @@ import Bookmarks from './components/pages/Bookmarks'
 import Explore from './components/pages/Explore'
 import PostModal from './components/ui/PostModal'
 
+import PostCommentPage from './components/pages/Commnets/Commnetspage'
 import Messages from './components/pages/Messages'
 import Notifications from './components/pages/Notifications'
 import Profile from './components/pages/Profile'
 import Register from './components/pages/Register'
 import XHomepage from './components/pages/Xhomepage'
-import PostCommentPage from './components/pages/Commnets/Commnetspage'
+import GrokChat from './components/pages/GrokChat'
 export const BASE_URL =
 	import.meta.env.MODE === 'development' ? 'http://127.0.0.1:5000/api' : '/api'
 function App() {
@@ -205,6 +206,16 @@ function AppContent() {
 								element={
 									isAuthenticated ? (
 										<Bookmarks />
+									) : (
+										<Navigate to='/register' replace />
+									)
+								}
+							/>
+							<Route
+								path='/grok'
+								element={
+									isAuthenticated ? (
+										<GrokChat />
 									) : (
 										<Navigate to='/register' replace />
 									)
